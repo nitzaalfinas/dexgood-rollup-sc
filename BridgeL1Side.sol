@@ -14,6 +14,7 @@ contract BridgeL1Side {
     event DepositETH(uint256 indexed depositId, address indexed user, uint256 amount, uint256 timestamp);
     event ReleaseERC20(uint256 indexed depositId, address indexed to, address indexed token, uint256 amount, uint256 timestamp);
     event ReleaseETH(uint256 indexed depositId, address indexed to, uint256 amount, uint256 timestamp);
+    event OwnershipTransferred(address indexed previousAdmin, address indexed newAdmin);
 
     modifier onlyAdmin() {
         require(msg.sender == admin, "Not admin");
@@ -70,5 +71,14 @@ contract BridgeL1Side {
             require(sent, "ETH transfer failed");
             emit ReleaseETH(depositIds[i], recipients[i], amounts[i], block.timestamp);
         }
+    }
+
+    // Transfer ownership function
+    function transferOwnership(address newAdmin) external onlyAdmin {
+        require(newAdmin != address(0), "New admin cannot be zero address");
+        require(newAdmin != admin, "New admin cannot be current admin");
+        address previousAdmin = admin;
+        admin = newAdmin;
+        emit OwnershipTransferred(previousAdmin, newAdmin);
     }
 }

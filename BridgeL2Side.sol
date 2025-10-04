@@ -24,6 +24,7 @@ contract ERC20MintBurnFreeze {
     event Burn(address indexed from, uint256 value);
     event Freeze(address indexed addr);
     event Unfreeze(address indexed addr);
+    event OwnershipTransferred(address indexed previousAdmin, address indexed newAdmin);
 
     modifier onlyAdmin() {
         require(msg.sender == admin, "Not admin");
@@ -107,6 +108,14 @@ contract ERC20MintBurnFreeze {
         emit Unfreeze(addr);
     }
 
+    function transferOwnership(address newAdmin) external onlyAdmin {
+        require(newAdmin != address(0), "New admin cannot be zero address");
+        require(newAdmin != admin, "New admin cannot be current admin");
+        address previousAdmin = admin;
+        admin = newAdmin;
+        emit OwnershipTransferred(previousAdmin, newAdmin);
+    }
+
     // --- Permit (EIP-2612) ---
     function permit(
         address owner,
@@ -151,11 +160,15 @@ contract BridgeL2Side {
 
     mapping(address => address) public tokens;
     mapping(uint256 => bool) public done;
+    
+    // Array untuk tracking semua token yang pernah dibuat
+    address[] public createdTokens;
 
     event DepositERC20(address indexed user, address indexed token, uint256 amount, uint256 timestamp);
     event DepositETH(address indexed user, uint256 amount, uint256 timestamp);
     event ReleaseERC20(uint256 indexed layerOneId, address to, address token, uint256 amount, uint256 timestamp);
     event ReleaseETH(address indexed to, uint256 amount, uint256 timestamp);
+    event OwnershipTransferred(address indexed previousAdmin, address indexed newAdmin);
 
     modifier onlyAdmin() {
         require(msg.sender == admin, "Not admin");
@@ -184,13 +197,15 @@ contract BridgeL2Side {
         require(!done[layerOneId], "Already done");
         if(tokens[layerOneToken] != address(0)) {
             // minting mapped token
-            // minting to tokens[layerOneToken]
             ERC20MintBurnFreeze(tokens[layerOneToken]).mint(to, amount);
         }
         else {
-            // create a new token mapping if not exists
-            tokens[layerOneToken] = address(new ERC20MintBurnFreeze(name, symbol, msg.sender));
-
+            // create a new token mapping with BridgeL2Side as admin
+            tokens[layerOneToken] = address(new ERC20MintBurnFreeze(name, symbol, address(this)));
+            
+            // Add to tracking array
+            createdTokens.push(tokens[layerOneToken]);
+            
             // minting to the new token
             ERC20MintBurnFreeze(tokens[layerOneToken]).mint(to, amount);
         }
@@ -204,6 +219,53 @@ contract BridgeL2Side {
         (bool sent, ) = to.call{value: amount}("");
         require(sent, "ETH transfer failed");
         emit ReleaseETH(to, amount, block.timestamp);
+    }
+
+    // Transfer ownership function with cascading to all created tokens
+    function transferOwnership(address newAdmin) external onlyAdmin {
+        require(newAdmin != address(0), "New admin cannot be zero address");
+        require(newAdmin != admin, "New admin cannot be current admin");
+        
+        address previousAdmin = admin;
+        admin = newAdmin;
+        
+        // Update ownership of all created ERC20 tokens to follow BridgeL2Side ownership
+        updateTokensOwnership(newAdmin);
+        
+        emit OwnershipTransferred(previousAdmin, newAdmin);
+    }
+    
+    // Internal function to update ownership of all created tokens
+    function updateTokensOwnership(address newOwner) internal {
+        // Iterate through all created tokens and transfer ownership
+        for(uint256 i = 0; i < createdTokens.length; i++) {
+            try ERC20MintBurnFreeze(createdTokens[i]).transferOwnership(newOwner) {
+                // Ownership transfer successful
+            } catch {
+                // If transfer fails, skip this token (could be already transferred or other issues)
+                // In production, you might want to emit an event here
+            }
+        }
+    }
+    
+    // Manual function to update specific token ownership (fallback method)
+    function updateTokenOwnership(address tokenL1Address, address newOwner) external onlyAdmin {
+        require(tokens[tokenL1Address] != address(0), "Token not found");
+        ERC20MintBurnFreeze(tokens[tokenL1Address]).transferOwnership(newOwner);
+    }
+    
+    // Utility functions untuk management
+    function getCreatedTokensCount() external view returns (uint256) {
+        return createdTokens.length;
+    }
+    
+    function getCreatedToken(uint256 index) external view returns (address) {
+        require(index < createdTokens.length, "Index out of bounds");
+        return createdTokens[index];
+    }
+    
+    function getAllCreatedTokens() external view returns (address[] memory) {
+        return createdTokens;
     }
 
     // Fungsi receive agar kontrak bisa menerima ETH
