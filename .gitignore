@@ -1,0 +1,26 @@
+node_modules
+artifacts
+cache
+coverage
+.env
+typechain
+*.tsbuildinfo
+*.log
+*.sqlite
+*.db
+build
+dist
+out
+.DS_Store
+.idea/
+.vscode/
+*.local
+*.secret
+*.pid
+# Ignore test output
+test-*.json
+# Ignore yarn and npm logs
+yarn-error.log
+npm-debug.log
+# Ignore hardhat deployment files
+deployments/
