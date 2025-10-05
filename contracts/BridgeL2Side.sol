@@ -6,7 +6,7 @@ import "@openzeppelin/contracts/access/Ownable2Step.sol";
 import "@openzeppelin/contracts/utils/Pausable.sol";
 import "@openzeppelin/contracts/utils/Address.sol";
 
-contract ERC20MintBurnFreeze {
+contract ERC20MintBurnFreeze is ReentrancyGuard, Pausable {
     string public name;
     string public symbol;
     uint8 public decimals = 18;
@@ -41,14 +41,12 @@ contract ERC20MintBurnFreeze {
     }
 
     constructor(string memory _name, string memory _symbol, address _admin) {
+        require(_admin != address(0), "Invalid admin");
         name = _name;
         symbol = _symbol;
         admin = _admin;
 
-        uint256 chainId;
-        assembly {
-            chainId := chainid()
-        }
+        uint256 chainId = block.chainid;
         DOMAIN_SEPARATOR = keccak256(
             abi.encode(
                 keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"),
@@ -60,7 +58,7 @@ contract ERC20MintBurnFreeze {
         );
     }
 
-    function transfer(address to, uint256 value) external notFrozen(msg.sender) notFrozen(to) returns (bool) {
+    function transfer(address to, uint256 value) external nonReentrant whenNotPaused notFrozen(msg.sender) notFrozen(to) returns (bool) {
         require(balanceOf[msg.sender] >= value, "Insufficient balance");
         balanceOf[msg.sender] -= value;
         balanceOf[to] += value;
@@ -68,13 +66,13 @@ contract ERC20MintBurnFreeze {
         return true;
     }
 
-    function approve(address spender, uint256 value) external notFrozen(msg.sender) notFrozen(spender) returns (bool) {
+    function approve(address spender, uint256 value) external nonReentrant whenNotPaused notFrozen(msg.sender) notFrozen(spender) returns (bool) {
         allowance[msg.sender][spender] = value;
         emit Approval(msg.sender, spender, value);
         return true;
     }
 
-    function transferFrom(address from, address to, uint256 value) external notFrozen(msg.sender) notFrozen(from) notFrozen(to) returns (bool) {
+    function transferFrom(address from, address to, uint256 value) external nonReentrant whenNotPaused notFrozen(msg.sender) notFrozen(from) notFrozen(to) returns (bool) {
         require(balanceOf[from] >= value, "Insufficient balance");
         require(allowance[from][msg.sender] >= value, "Allowance exceeded");
         balanceOf[from] -= value;
@@ -84,14 +82,14 @@ contract ERC20MintBurnFreeze {
         return true;
     }
 
-    function mint(address to, uint256 value) external onlyAdmin {
+    function mint(address to, uint256 value) external onlyAdmin whenNotPaused {
         balanceOf[to] += value;
         totalSupply += value;
         emit Mint(to, value);
         emit Transfer(address(0), to, value);
     }
 
-    function burnFrom(address from, uint256 value) external onlyAdmin {
+    function burnFrom(address from, uint256 value) external onlyAdmin whenNotPaused {
         require(balanceOf[from] >= value, "Insufficient balance");
         balanceOf[from] -= value;
         totalSupply -= value;
@@ -100,11 +98,13 @@ contract ERC20MintBurnFreeze {
     }
 
     function freeze(address addr) external onlyAdmin {
+        require(addr != address(0), "Invalid address");
         frozen[addr] = true;
         emit Freeze(addr);
     }
 
     function unfreeze(address addr) external onlyAdmin {
+        require(addr != address(0), "Invalid address");
         frozen[addr] = false;
         emit Unfreeze(addr);
     }
@@ -153,6 +153,14 @@ contract ERC20MintBurnFreeze {
     function version() external pure returns (string memory) {
         return "1";
     }
+
+    function pauseToken() external onlyAdmin {
+        _pause();
+    }
+
+    function unpauseToken() external onlyAdmin {
+        _unpause();
+    }
 }
 
 /**
@@ -191,7 +199,7 @@ contract BridgeL2Side is ReentrancyGuard, Ownable2Step, Pausable {
     uint256 public lastWithdrawVolumeReset; // Daily withdraw volume reset timestamp
     
     // ========== LIMITS & DELAYS ==========
-    uint256 public constant MAX_BATCH_SIZE = 50;
+    uint256 public constant MAX_BATCH_SIZE = 25;
     uint256 public constant MIN_BATCH_DELAY = 1 hours;
     uint256 public constant EMERGENCY_DELAY = 24 hours;
     uint256 public constant WITHDRAW_COOLDOWN = 30 seconds;     // Anti-spam for withdraws
@@ -341,13 +349,14 @@ contract BridgeL2Side is ReentrancyGuard, Ownable2Step, Pausable {
      * @param amount Amount to withdraw
      * @dev This burns L2 wrapped tokens, relayer will unlock L1 tokens
      */
-    function withdrawERC20(address l2Token, uint256 amount) 
+    function withdrawERC20(address l2Token, uint256 amount, uint256 deadline) 
         external 
         nonReentrant
         whenNotPaused
         validWithdrawAmount(amount)
         withdrawRateLimited
     {
+        require(deadline == 0 || block.timestamp <= deadline, "Transaction expired");
         require(l2Token != address(0), "Invalid token address");
         require(tokensReverse[l2Token] != address(0), "Token not mapped to L1");
         
@@ -374,11 +383,20 @@ contract BridgeL2Side is ReentrancyGuard, Ownable2Step, Pausable {
     }
 
     /**
+     * @notice Withdraw ERC20 tokens from L2 to L1 (backward compatibility)
+     * @param l2Token L2 wrapped token address to burn
+     * @param amount Amount to withdraw
+     */
+    function withdrawERC20(address l2Token, uint256 amount) external {
+        this.withdrawERC20(l2Token, amount, 0);
+    }
+
+    /**
      * @notice Withdraw ETH from L2 to L1 (burn/lock user's ETH)
      * @dev User sends ETH with transaction, ETH gets locked in bridge
      * @dev Relayer will unlock equivalent ETH on L1 side
      */
-    function withdrawETH() 
+    function withdrawETH(uint256 deadline) 
         external 
         payable
         nonReentrant
@@ -386,6 +404,7 @@ contract BridgeL2Side is ReentrancyGuard, Ownable2Step, Pausable {
         validWithdrawAmount(msg.value)
         withdrawRateLimited
     {
+        require(deadline == 0 || block.timestamp <= deadline, "Transaction expired");
         require(msg.value > 0, "Must send ETH to withdraw");
         
         // Update tracking AFTER receiving ETH
@@ -398,6 +417,13 @@ contract BridgeL2Side is ReentrancyGuard, Ownable2Step, Pausable {
         // Relayer will process this event and unlock ETH on L1
         
         emit WithdrawETH(withdrawId, msg.sender, msg.value, nonce, block.timestamp);
+    }
+
+    /**
+     * @notice Withdraw ETH from L2 to L1 (backward compatibility)
+     */
+    function withdrawETH() external payable {
+        this.withdrawETH{value: msg.value}(0);
     }
 
     // ========== DEPOSIT FUNCTIONS (L1 → L2) ==========
@@ -485,14 +511,15 @@ contract BridgeL2Side is ReentrancyGuard, Ownable2Step, Pausable {
         uint256 depositId = ++depositCounter;
         done[l1DepositId] = true;
         
-        payable(to).sendValue(amount);
+        (bool success, ) = payable(to).call{value: amount}("");
+        require(success, "ETH transfer failed");
         emit DepositETH(depositId, to, amount, block.timestamp);
     }
 
     // ========== BATCH OPERATIONS ==========
     
     /**
-     * @notice Batch deposit ERC20 tokens (up to 50 at once)
+     * @notice Batch deposit ERC20 tokens (up to 25 at once)
      */
     function batchDepositERC20(
         uint256[] calldata l1DepositIds,
@@ -513,49 +540,124 @@ contract BridgeL2Side is ReentrancyGuard, Ownable2Step, Pausable {
         );
         require(length > 0 && length <= MAX_BATCH_SIZE, "Invalid batch size");
         
-        uint256 totalAmount = 0;
+        // Validate all deposits first (prevent front-running)
+        _validateBatchDeposits(l1DepositIds);
         
         // Execute batch deposits
-        for (uint256 i = 0; i < length; i++) {
+        uint256 totalAmount = _executeBatchDeposits(
+            l1DepositIds,
+            l1Tokens, 
+            recipients,
+            amounts,
+            names,
+            symbols
+        );
+        
+        batchCounter++;
+        lastBatchTime = block.timestamp;
+        emit BatchComplete(batchCounter, length, totalAmount);
+    }
+    
+    /**
+     * @notice Internal function to validate batch deposits
+     * @param l1DepositIds Array of L1 deposit IDs to validate
+     */
+    function _validateBatchDeposits(uint256[] calldata l1DepositIds) internal view {
+        for (uint256 i = 0; i < l1DepositIds.length; i++) {
             require(!done[l1DepositIds[i]], "Already processed");
+        }
+    }
+    
+    /**
+     * @notice Internal function to execute batch deposits
+     * @param l1DepositIds Array of L1 deposit IDs
+     * @param l1Tokens Array of L1 token addresses
+     * @param recipients Array of recipient addresses
+     * @param amounts Array of amounts
+     * @param names Array of token names
+     * @param symbols Array of token symbols
+     * @return totalAmount Total amount processed
+     */
+    function _executeBatchDeposits(
+        uint256[] calldata l1DepositIds,
+        address[] calldata l1Tokens,
+        address[] calldata recipients,
+        uint256[] calldata amounts,
+        string[] calldata names,
+        string[] calldata symbols
+    ) internal returns (uint256 totalAmount) {
+        uint256 length = l1DepositIds.length;
+        totalAmount = 0;
+        
+        for (uint256 i = 0; i < length; i++) {
+            // Validate single deposit
             require(recipients[i] != address(0), "Invalid recipient");
             require(amounts[i] > 0, "Invalid amount");
             require(amounts[i] <= MAX_WITHDRAW_AMOUNT, "Amount too large");
             require(bytes(names[i]).length > 0 && bytes(names[i]).length <= 50, "Invalid name");
             require(bytes(symbols[i]).length > 0 && bytes(symbols[i]).length <= 10, "Invalid symbol");
+            require(totalAmount <= type(uint256).max - amounts[i], "Overflow protection");
+            
             totalAmount += amounts[i];
             require(totalAmount <= MAX_WITHDRAW_AMOUNT * MAX_BATCH_SIZE, "Total amount too large");
             
-            address l2Token;
-            uint256 depositId = ++depositCounter;
+            // Process single deposit
+            _processSingleBatchDeposit(
+                l1DepositIds[i],
+                l1Tokens[i],
+                recipients[i],
+                amounts[i],
+                names[i],
+                symbols[i]
+            );
+        }
+    }
+    
+    /**
+     * @notice Internal function to process single deposit in batch
+     * @param l1DepositId L1 deposit ID
+     * @param l1Token L1 token address
+     * @param recipient Recipient address
+     * @param amount Amount to deposit
+     * @param name Token name
+     * @param symbol Token symbol
+     */
+    function _processSingleBatchDeposit(
+        uint256 l1DepositId,
+        address l1Token,
+        address recipient,
+        uint256 amount,
+        string calldata name,
+        string calldata symbol
+    ) internal {
+        uint256 depositId = ++depositCounter;
+        address l2Token;
+        
+        // Check if L2 wrapped token exists
+        address cachedL2Token = tokens[l1Token];
+        if (cachedL2Token != address(0)) {
+            l2Token = cachedL2Token;
+            // Verify token metadata consistency
+            require(
+                keccak256(bytes(ERC20MintBurnFreeze(l2Token).name())) == keccak256(bytes(name)) &&
+                keccak256(bytes(ERC20MintBurnFreeze(l2Token).symbol())) == keccak256(bytes(symbol)),
+                "Token metadata mismatch"
+            );
+            ERC20MintBurnFreeze(l2Token).mint(recipient, amount);
+        } else {
+            // Create new L2 wrapped token
+            require(createdTokens.length < 10000, "Too many tokens created");
+            l2Token = address(new ERC20MintBurnFreeze(name, symbol, address(this)));
+            tokens[l1Token] = l2Token;
+            tokensReverse[l2Token] = l1Token;
+            createdTokens.push(l2Token);
             
-            if(tokens[l1Tokens[i]] != address(0)) {
-                l2Token = tokens[l1Tokens[i]];
-                // Verify token metadata consistency
-                require(
-                    keccak256(bytes(ERC20MintBurnFreeze(l2Token).name())) == keccak256(bytes(names[i])) &&
-                    keccak256(bytes(ERC20MintBurnFreeze(l2Token).symbol())) == keccak256(bytes(symbols[i])),
-                    "Token metadata mismatch"
-                );
-                ERC20MintBurnFreeze(l2Token).mint(recipients[i], amounts[i]);
-            } else {
-                require(createdTokens.length < 10000, "Too many tokens created");
-                l2Token = address(new ERC20MintBurnFreeze(names[i], symbols[i], address(this)));
-                tokens[l1Tokens[i]] = l2Token;
-                tokensReverse[l2Token] = l1Tokens[i];
-                createdTokens.push(l2Token);
-                
-                ERC20MintBurnFreeze(l2Token).mint(recipients[i], amounts[i]);
-                emit TokenCreated(l1Tokens[i], l2Token, names[i], symbols[i]);
-            }
-            
-            done[l1DepositIds[i]] = true;
-            emit DepositERC20(depositId, l1DepositIds[i], recipients[i], l1Tokens[i], l2Token, amounts[i], block.timestamp);
+            ERC20MintBurnFreeze(l2Token).mint(recipient, amount);
+            emit TokenCreated(l1Token, l2Token, name, symbol);
         }
         
-        batchCounter++;
-        lastBatchTime = block.timestamp;
-        emit BatchComplete(batchCounter, length, totalAmount);
+        done[l1DepositId] = true;
+        emit DepositERC20(depositId, l1DepositId, recipient, l1Token, l2Token, amount, block.timestamp);
     }
 
     // ========== EMERGENCY FUNCTIONS ==========
@@ -577,20 +679,6 @@ contract BridgeL2Side is ReentrancyGuard, Ownable2Step, Pausable {
     }
     
     /**
-     * @notice Emergency sweep ERC20 tokens (48-hour timelock required)
-     */
-    function emergencySweepERC20(address token, address to, uint256 amount) 
-        external 
-        onlyOwner 
-        emergencyUnlocked 
-    {
-        require(to != address(0), "Invalid recipient");
-        ERC20MintBurnFreeze(token).mint(to, amount);
-        emit EmergencyWithdrawal(token, to, amount);
-        emergencyUnlockTime = 0;
-    }
-    
-    /**
      * @notice Emergency sweep ETH (48-hour timelock required)
      */
     function emergencySweepETH(address to, uint256 amount) 
@@ -600,7 +688,8 @@ contract BridgeL2Side is ReentrancyGuard, Ownable2Step, Pausable {
     {
         require(to != address(0), "Invalid recipient");
         require(address(this).balance >= amount, "Insufficient ETH");
-        payable(to).sendValue(amount);
+        (bool success, ) = payable(to).call{value: amount}("");
+        require(success, "ETH transfer failed");
         emit EmergencyWithdrawal(address(0), to, amount);
         emergencyUnlockTime = 0;
     }
@@ -612,17 +701,19 @@ contract BridgeL2Side is ReentrancyGuard, Ownable2Step, Pausable {
      */
     function pauseBridge() external onlyOwner {
         _pause();
+        emit Paused(msg.sender);
     }
     
     function unpauseBridge() external onlyOwner {
         _unpause();
+        emit Unpaused(msg.sender);
     }
     
     /**
      * @notice Transfer ownership of bridge and update all token ownerships
      * @param newOwner New owner address
      */
-    function transferBridgeOwnership(address newOwner) external onlyOwner {
+    function transferBridgeOwnership(address newOwner) external payable onlyOwner {
         require(newOwner != address(0), "Invalid new owner");
         _transferOwnership(newOwner);
         updateTokensOwnership(newOwner);
@@ -633,15 +724,19 @@ contract BridgeL2Side is ReentrancyGuard, Ownable2Step, Pausable {
      * @param newOwner New owner address
      */
     function updateTokensOwnership(address newOwner) internal {
+        uint256 failureCount = 0;
         for(uint256 i = 0; i < createdTokens.length; i++) {
             try ERC20MintBurnFreeze(createdTokens[i]).transferOwnership(newOwner) {
                 // Success
             } catch Error(string memory reason) {
                 emit TokenOwnershipUpdateFailed(createdTokens[i], reason);
+                failureCount++;
             } catch {
                 emit TokenOwnershipUpdateFailed(createdTokens[i], "Unknown error");
+                failureCount++;
             }
         }
+        require(failureCount == 0, "Some token ownership transfers failed");
     }
     
     /**
