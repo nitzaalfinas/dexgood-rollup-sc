@@ -199,21 +199,6 @@ contract BridgeL2Side is ReentrancyGuard, Ownable2Step, Pausable {
     uint256 public dailyWithdrawVolume;    // Track daily withdraw volume
     uint256 public lastWithdrawVolumeReset; // Daily withdraw volume reset timestamp
 
-    bool public sampaiA;
-    bool public sampaiB;
-    bool public sampaiC;
-    bool public sampaiD;
-    bool public sampaiE;
-    bool public sampaiF;
-    bool public sampaiG;
-    bool public sampaiH;
-    bool public sampaiI;
-    bool public sampaiJ;
-    bool public sampaiK;
-    bool public sampaiL;
-    bool public sampaiM;
-    bool public sampaiZ;
-
     // ========== LIMITS & DELAYS ==========
     uint256 public constant MAX_BATCH_SIZE = 25;
     uint256 public constant MIN_BATCH_DELAY = 1 hours;
@@ -391,39 +376,26 @@ contract BridgeL2Side is ReentrancyGuard, Ownable2Step, Pausable {
         validWithdrawAmountErc20(amount, l2Token)
         withdrawRateLimited
     {
-        sampaiA = true;
         require(l2Token != address(0), "Invalid token address");
-        sampaiB = true;
         require(tokensReverse[l2Token] != address(0), "Token not mapped to L1");
-        sampaiC = true;
         
         // Security checks for token and user
         ERC20MintBurnFreeze token = ERC20MintBurnFreeze(l2Token);
-        sampaiD = true;
         require(!token.frozen(msg.sender), "User is frozen");
-        sampaiE = true;
         require(!token.frozen(l2Token), "Token is frozen");
-        sampaiF = true;
         require(token.balanceOf(msg.sender) >= amount, "Insufficient balance");
-        sampaiG = true;
         
         // Get L1 token address
         address l1Token = tokensReverse[l2Token];
-        sampaiH = true;
         
         // Update tracking BEFORE burning (prevent reentrancy issues)
         uint256 nonce = ++userNonce[msg.sender];
-        sampaiI = true;
         uint256 withdrawId = ++withdrawCounter;
-        sampaiJ = true;
         _updateDailyWithdraw(amount);
-        sampaiK = true;
         _checkDailyWithdrawVolume(amount);
-        sampaiL = true;
         
         // Burn L2 wrapped tokens - this will revert if insufficient balance/allowance
         token.burnFrom(msg.sender, amount);
-        sampaiM = true;
         
         // Emit event AFTER successful burn
         emit WithdrawERC20(withdrawId, msg.sender, l2Token, l1Token, amount, nonce, block.timestamp);
