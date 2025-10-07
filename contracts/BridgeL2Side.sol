@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.0;
+pragma solidity ^0.8.20;
 
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/access/Ownable2Step.sol";
@@ -189,6 +189,7 @@ contract BridgeL2Side is ReentrancyGuard, Ownable2Step, Pausable {
     mapping(address => uint256) public dailyWithdrawAmount; // Daily withdraw tracking
     mapping(address => uint256) public dailyWithdrawReset;  // Daily reset timestamp
     mapping(address => uint256) public lastDepositTime;    // Rate limiting for deposits (admin)
+    mapping(address => uint256) public withdrawMinimums; // Track which tokens have minimum withdraw enforced
     
     // ========== TIME TRACKING ==========
     uint256 public lastBatchTime;
@@ -197,7 +198,22 @@ contract BridgeL2Side is ReentrancyGuard, Ownable2Step, Pausable {
     uint256 public lastDepositVolumeReset; // Daily volume reset timestamp
     uint256 public dailyWithdrawVolume;    // Track daily withdraw volume
     uint256 public lastWithdrawVolumeReset; // Daily withdraw volume reset timestamp
-    
+
+    bool public sampaiA;
+    bool public sampaiB;
+    bool public sampaiC;
+    bool public sampaiD;
+    bool public sampaiE;
+    bool public sampaiF;
+    bool public sampaiG;
+    bool public sampaiH;
+    bool public sampaiI;
+    bool public sampaiJ;
+    bool public sampaiK;
+    bool public sampaiL;
+    bool public sampaiM;
+    bool public sampaiZ;
+
     // ========== LIMITS & DELAYS ==========
     uint256 public constant MAX_BATCH_SIZE = 25;
     uint256 public constant MIN_BATCH_DELAY = 1 hours;
@@ -229,12 +245,18 @@ contract BridgeL2Side is ReentrancyGuard, Ownable2Step, Pausable {
     event TokenOwnershipUpdateFailed(address indexed token, string reason);
     event EmergencyUnlockRequested(uint256 unlockTime);
     event EmergencyUnlockCancelled();
+    event MinimumWithdrawUpdated(address indexed token, uint256 oldMinimum, uint256 newMinimum);
 
     // ========== MODIFIERS ==========
     
     modifier validWithdrawAmount(uint256 amount) {
         require(amount >= MIN_WITHDRAW_AMOUNT, "Amount too small");
         require(amount <= MAX_WITHDRAW_AMOUNT, "Amount too large");
+        _;
+    }
+
+    modifier validWithdrawAmountErc20(uint256 amount, address l2Token) {
+        require(amount >= withdrawMinimums[l2Token], "Amount too small");
         _;
     }
     
@@ -294,6 +316,19 @@ contract BridgeL2Side is ReentrancyGuard, Ownable2Step, Pausable {
             dailyWithdrawReset[msg.sender] = block.timestamp;
         }
     }
+
+    /**
+     * @notice Set minimum withdraw amount for specific token
+     * @param l2Token L2 token address
+     * @param minimumAmount Minimum withdraw amount in token's native decimals
+     */
+    function setTokenMinimumWithdraw(address l2Token, uint256 minimumAmount) external onlyOwner {
+        require(l2Token != address(0), "Invalid token address");
+        require(tokensReverse[l2Token] != address(0), "Token not found");
+        uint256 oldMinimum = withdrawMinimums[l2Token];
+        withdrawMinimums[l2Token] = minimumAmount;
+        emit MinimumWithdrawUpdated(l2Token, oldMinimum, minimumAmount);
+    }
     
 
     
@@ -349,46 +384,49 @@ contract BridgeL2Side is ReentrancyGuard, Ownable2Step, Pausable {
      * @param amount Amount to withdraw
      * @dev This burns L2 wrapped tokens, relayer will unlock L1 tokens
      */
-    function withdrawERC20(address l2Token, uint256 amount, uint256 deadline) 
+    function withdrawERC20(address l2Token, uint256 amount) 
         external 
         nonReentrant
         whenNotPaused
-        validWithdrawAmount(amount)
+        validWithdrawAmountErc20(amount, l2Token)
         withdrawRateLimited
     {
-        require(deadline == 0 || block.timestamp <= deadline, "Transaction expired");
+        sampaiA = true;
         require(l2Token != address(0), "Invalid token address");
+        sampaiB = true;
         require(tokensReverse[l2Token] != address(0), "Token not mapped to L1");
+        sampaiC = true;
         
         // Security checks for token and user
         ERC20MintBurnFreeze token = ERC20MintBurnFreeze(l2Token);
+        sampaiD = true;
         require(!token.frozen(msg.sender), "User is frozen");
+        sampaiE = true;
         require(!token.frozen(l2Token), "Token is frozen");
+        sampaiF = true;
         require(token.balanceOf(msg.sender) >= amount, "Insufficient balance");
+        sampaiG = true;
         
         // Get L1 token address
         address l1Token = tokensReverse[l2Token];
+        sampaiH = true;
         
         // Update tracking BEFORE burning (prevent reentrancy issues)
         uint256 nonce = ++userNonce[msg.sender];
+        sampaiI = true;
         uint256 withdrawId = ++withdrawCounter;
+        sampaiJ = true;
         _updateDailyWithdraw(amount);
+        sampaiK = true;
         _checkDailyWithdrawVolume(amount);
+        sampaiL = true;
         
         // Burn L2 wrapped tokens - this will revert if insufficient balance/allowance
         token.burnFrom(msg.sender, amount);
+        sampaiM = true;
         
         // Emit event AFTER successful burn
         emit WithdrawERC20(withdrawId, msg.sender, l2Token, l1Token, amount, nonce, block.timestamp);
-    }
-
-    /**
-     * @notice Withdraw ERC20 tokens from L2 to L1 (backward compatibility)
-     * @param l2Token L2 wrapped token address to burn
-     * @param amount Amount to withdraw
-     */
-    function withdrawERC20(address l2Token, uint256 amount) external {
-        this.withdrawERC20(l2Token, amount, 0);
     }
 
     /**
@@ -396,7 +434,7 @@ contract BridgeL2Side is ReentrancyGuard, Ownable2Step, Pausable {
      * @dev User sends ETH with transaction, ETH gets locked in bridge
      * @dev Relayer will unlock equivalent ETH on L1 side
      */
-    function withdrawETH(uint256 deadline) 
+    function withdrawETH() 
         external 
         payable
         nonReentrant
@@ -404,7 +442,6 @@ contract BridgeL2Side is ReentrancyGuard, Ownable2Step, Pausable {
         validWithdrawAmount(msg.value)
         withdrawRateLimited
     {
-        require(deadline == 0 || block.timestamp <= deadline, "Transaction expired");
         require(msg.value > 0, "Must send ETH to withdraw");
         
         // Update tracking AFTER receiving ETH
@@ -417,13 +454,6 @@ contract BridgeL2Side is ReentrancyGuard, Ownable2Step, Pausable {
         // Relayer will process this event and unlock ETH on L1
         
         emit WithdrawETH(withdrawId, msg.sender, msg.value, nonce, block.timestamp);
-    }
-
-    /**
-     * @notice Withdraw ETH from L2 to L1 (backward compatibility)
-     */
-    function withdrawETH() external payable {
-        this.withdrawETH{value: msg.value}(0);
     }
 
     // ========== DEPOSIT FUNCTIONS (L1 → L2) ==========
@@ -477,7 +507,10 @@ contract BridgeL2Side is ReentrancyGuard, Ownable2Step, Pausable {
             tokens[l1Token] = l2Token;
             tokensReverse[l2Token] = l1Token;
             createdTokens.push(l2Token);
-            
+
+            // Set minimum withdraw amount for new tokens
+            withdrawMinimums[l2Token] = 5 * (10 ** 18); // 5 tokens in wei
+
             ERC20MintBurnFreeze(l2Token).mint(to, amount);
             emit TokenCreated(l1Token, l2Token, name, symbol);
         }
@@ -752,42 +785,6 @@ contract BridgeL2Side is ReentrancyGuard, Ownable2Step, Pausable {
     // ========== VIEW FUNCTIONS ==========
     
     /**
-     * @notice Check if L1 deposit has been processed
-     * @param l1DepositId L1 deposit ID
-     * @return bool True if processed
-     */
-    function isProcessed(uint256 l1DepositId) external view returns (bool) {
-        return done[l1DepositId];
-    }
-    
-    /**
-     * @notice Get L2 token address for L1 token
-     * @param l1Token L1 token address
-     * @return address L2 wrapped token address
-     */
-    function getL2Token(address l1Token) external view returns (address) {
-        return tokens[l1Token];
-    }
-    
-    /**
-     * @notice Get L1 token address for L2 token
-     * @param l2Token L2 wrapped token address
-     * @return address L1 token address
-     */
-    function getL1Token(address l2Token) external view returns (address) {
-        return tokensReverse[l2Token];
-    }
-    
-    /**
-     * @notice Get user's current nonce
-     * @param user User address
-     * @return uint256 Current nonce
-     */
-    function getUserNonce(address user) external view returns (uint256) {
-        return userNonce[user];
-    }
-    
-    /**
      * @notice Get user's remaining daily withdraw limit
      * @param user User address
      * @return uint256 Remaining daily limit
@@ -820,35 +817,11 @@ contract BridgeL2Side is ReentrancyGuard, Ownable2Step, Pausable {
     }
     
     /**
-     * @notice Calculate fee for given amount (always returns 0)
-     * @return uint256 Fee amount (always 0)
-     */
-    function calculateWithdrawFee(uint256) external pure returns (uint256) {
-        return 0; // No fees charged
-    }
-    
-    /**
-     * @notice Get fee rate (always returns 0)
-     * @return uint256 Fee rate (always 0)
-     */
-    function getFeeRate() external pure returns (uint256) {
-        return 0; // No fees charged
-    }
-    
-    /**
      * @notice Check if emergency functions are unlocked
      * @return bool True if emergency functions can be called
      */
     function isEmergencyUnlocked() external view returns (bool) {
         return emergencyUnlockTime > 0 && block.timestamp >= emergencyUnlockTime;
-    }
-    
-    /**
-     * @notice Get emergency unlock timestamp
-     * @return uint256 Timestamp when emergency functions become available
-     */
-    function getEmergencyUnlockTime() external view returns (uint256) {
-        return emergencyUnlockTime;
     }
     
     /**
@@ -868,14 +841,6 @@ contract BridgeL2Side is ReentrancyGuard, Ownable2Step, Pausable {
      */
     function canBatch() external view returns (bool) {
         return block.timestamp >= lastBatchTime + MIN_BATCH_DELAY;
-    }
-    
-    /**
-     * @notice Get contract ETH balance
-     * @return uint256 ETH balance
-     */
-    function getETHBalance() external view returns (uint256) {
-        return address(this).balance;
     }
     
     /**
@@ -906,19 +871,6 @@ contract BridgeL2Side is ReentrancyGuard, Ownable2Step, Pausable {
         }
         
         currentFeeRate = 0; // No fees charged
-    }
-    
-    function getCreatedTokensCount() external view returns (uint256) {
-        return createdTokens.length;
-    }
-    
-    function getCreatedToken(uint256 index) external view returns (address) {
-        require(index < createdTokens.length, "Index out of bounds");
-        return createdTokens[index];
-    }
-    
-    function getAllCreatedTokens() external view returns (address[] memory) {
-        return createdTokens;
     }
     
     /**

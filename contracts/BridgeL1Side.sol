@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.0;
+pragma solidity ^0.8.20;
 
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
@@ -40,8 +40,7 @@ contract BridgeL1Side is ReentrancyGuard, Ownable2Step, Pausable {
     uint256 public constant MAX_BATCH_SIZE = 50;
     uint256 public constant MIN_BATCH_DELAY = 1 hours;
     uint256 public constant EMERGENCY_DELAY = 24 hours;
-    uint256 public constant MIN_DEPOSIT = 0.001 ether;
-    uint256 public constant MAX_DEPOSIT = 1000 ether;
+    // MIN_DEPOSIT and MAX_DEPOSIT removed - allowing any amount
     uint256 public constant MIN_DEPOSIT_INTERVAL = 30 seconds; // Anti-spam
     uint256 public constant DAILY_DEPOSIT_LIMIT = 10000 ether; // Per user daily limit
     uint256 public constant DAILY_RELEASE_LIMIT = 50000 ether; // Per user daily release limit
@@ -63,11 +62,7 @@ contract BridgeL1Side is ReentrancyGuard, Ownable2Step, Pausable {
     event EmergencyUnlockCancelled();
 
     // ========== MODIFIERS ==========
-    modifier validDepositAmount(uint256 amount) {
-        require(amount >= MIN_DEPOSIT, "Amount too small");
-        require(amount <= MAX_DEPOSIT, "Amount too large");
-        _;
-    }
+    // validDepositAmount modifier removed - no min/max limits
     
     modifier rateLimited() {
         require(
@@ -115,15 +110,6 @@ contract BridgeL1Side is ReentrancyGuard, Ownable2Step, Pausable {
     }
     
     /**
-     * @notice Bridge fee removed - following industry standard
-     * @dev Major bridges (Arbitrum, Optimism, zkSync) don't charge deposit fees
-     * @dev Revenue model: Gas fees and sequencer/validator economics
-     */
-    function _removed_calculateFee() internal pure {
-        // Fee system removed for competitive user experience
-    }
-    
-    /**
      * @notice Update daily deposit tracking
      * @param amount Deposit amount
      */
@@ -168,20 +154,22 @@ contract BridgeL1Side is ReentrancyGuard, Ownable2Step, Pausable {
     }
 
     // ========== DEPOSIT FUNCTIONS ==========
+
+    // TODO: Jangan diproses jika decimals > 18
     
     /**
      * @notice Deposit ERC20 tokens to bridge
      * @param token ERC20 token address
-     * @param amount Amount to deposit
+     * @param amount Amount to deposit (no min/max limits)
      */
     function depositERC20(address token, uint256 amount) 
         external 
         nonReentrant 
         whenNotPaused
-        validDepositAmount(amount)
         rateLimited
     {
         require(token != address(0), "Invalid token address");
+        require(amount > 0, "Amount must be greater than 0");
         
         // No fees charged - following industry standard (Arbitrum, Optimism)
         
@@ -204,9 +192,10 @@ contract BridgeL1Side is ReentrancyGuard, Ownable2Step, Pausable {
         payable 
         nonReentrant 
         whenNotPaused
-        validDepositAmount(msg.value)
         rateLimited
     {
+        require(msg.value > 0, "Amount must be greater than 0");
+        
         // No fees charged - following industry standard
         
         // Update tracking
@@ -769,7 +758,7 @@ contract BridgeL1Side is ReentrancyGuard, Ownable2Step, Pausable {
      */
     receive() external payable {
         require(!paused(), "Contract is paused");
-        require(msg.value >= MIN_DEPOSIT && msg.value <= MAX_DEPOSIT, "Invalid ETH amount");
+        require(msg.value > 0, "Amount must be greater than 0");
         
         // Rate limiting check (same as rateLimited modifier)
         require(

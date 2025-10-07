@@ -1,21 +1,18 @@
 {
-  "name": "dexnew3-sc",
+  "name": "dexgood-bridge-contracts",
   "version": "1.0.0",
-  "description": "A Hardhat project for testing smart contracts",
+  "description": "Cross-chain bridge smart contracts for Ethereum ↔ DexGood",
   "scripts": {
-    "test": "hardhat test"
+    "compile": "npx hardhat compile"
   },
   "dependencies": {
     "@openzeppelin/contracts": "^5.4.0",
     "chai": "^4.3.4",
-    "chalk": "^4.1.2",
-    "fp-ts": "^2.16.10",
-    "mocha": "^8.4.0"
+    "chalk": "^4.1.2"
   },
   "devDependencies": {
     "@nomicfoundation/hardhat-toolbox": "^6.1.0",
     "dotenv": "^17.2.1",
-    "hardhat": "^2.26.1",
-    "hardhat-gas-reporter": "^2.3.0"
+    "hardhat": "^2.26.1"
   }
 }
